@@ -1,0 +1,24 @@
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Logs
+*.log
+hyperd.log
+
+# Tableau data files — keep scripts only, not workbooks or extracts
+*.twbx
+*.twb
+*.hyper
+*.hyper.fixed
+*.zip
+*.twbr
+
+# Unzipped workbook folders
+Urban Health Index NWL  - Copy/
