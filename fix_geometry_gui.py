@@ -16,7 +16,7 @@ import threading
 import traceback
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import PhotoImage, filedialog, messagebox, scrolledtext, ttk
 
 from fix_hyper_geometry import HyperFileResult, process_hyper, process_twbx
 
@@ -71,6 +71,9 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Tableau Geometry Fixer")
+        _base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+        self._icon = PhotoImage(file=_base / "Logo.png")
+        self.iconphoto(True, self._icon)
         self.minsize(720, 540)
         self.resizable(True, True)
         self._queue: queue.Queue = queue.Queue()

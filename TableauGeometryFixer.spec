@@ -33,6 +33,8 @@ a = Analysis(
         (_shapely_dir, "shapely"),
         # cffi backend
         (_cffi_dir, "cffi"),
+        # app icon
+        ("Logo.png", "."),
     ],
     hiddenimports=[
         "fix_hyper_geometry",
@@ -72,5 +74,5 @@ exe = EXE(
     console=False,      # no console window (GUI app)
     bootloader_ignore_signals=False,
     runtime_tmpdir=None,
-    icon=None,
+    icon="Logo.ico",
 )

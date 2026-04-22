@@ -16,22 +16,23 @@ Requirements:
     pip install tableauhyperapi shapely
 """
 
-import argparse
-import shutil
-import tempfile
-import zipfile
-from dataclasses import dataclass, field
-from pathlib import Path
+import argparse #used for writing CLIs and taking in arguments from the user.
+import tempfile #used for generating temporary files.
+import zipfile #used for creating and managing zip files.
+from dataclasses import dataclass, field 
+    # dataclass lets you build custom classes (basically object blueprints).
+    # field usually lets you set a default value.
+from pathlib import Path #used for handling file paths.
 
-import shapely
-from shapely import wkt as shapely_wkt
-from shapely.geometry import MultiPolygon
-from shapely.geometry.polygon import orient
-from shapely.validation import explain_validity
+#shapely is the package which contains all our spatial functionality
+from shapely import wkt as shapely_wkt #wkt = "well known text", a text markup language for geometry.
+from shapely.geometry import MultiPolygon #a collection of polygons - enforces zero overlap.
+from shapely.geometry.polygon import orient #converts a polygon into a new one with correct orientation (outer rings counter-clockwise and inner rings clockwise)
+from shapely.validation import explain_validity #confirms whether an object is valid or not (orientation, overlap, etc)
 from tableauhyperapi import (
     Connection, CreateMode, HyperProcess, Inserter,
     SqlType, TableDefinition, TableName, Telemetry,
-)
+) #all the basic Tableau API functions.
 
 # ---------------------------------------------------------------------------
 # Geometry repair
@@ -41,14 +42,14 @@ def _fix_geom(geom):
     """Recursively fix winding order and self-intersections."""
     t = geom.geom_type
     if t == "Polygon":
-        if not geom.is_valid:
-            geom = geom.buffer(0)
+        if not geom.is_valid: #returns false in cases such as self-intersection.
+            geom = geom.buffer(0) #buffer(0) is used to fix the above. The result covers the same area as the original polygon but buffer(0) rebuilds it with valid geometry.
         # orient(sign=1.0) -> exterior CCW (positive area), holes CW
-        return orient(geom, sign=1.0)
+        return orient(geom, sign=1.0) #orient fixes winding order, i.e. the order of the vertices. sign 1.0 means that the exterior rings will be counter clockwise and any interior will be clockwise but I'm not sure what any other sign value would actually do here.
     if t == "MultiPolygon":
         fixed = [orient(p.buffer(0) if not p.is_valid else p, sign=1.0)
-                 for p in geom.geoms]
-        return MultiPolygon(fixed)
+                 for p in geom.geoms] #same as above, but done on every polygon within the multipolygon.
+        return MultiPolygon(fixed) #the above creates a list of polygons, so this makes it a multipolygon again.
     # Points, LineStrings, GeometryCollections without polygons — no winding to fix
     return geom
 
@@ -82,7 +83,7 @@ class ColumnStats:
     topology_repaired: int = 0
     winding_corrected: int = 0
     still_invalid: list = field(default_factory=list)
-
+#a custom dataclass containing info about the state of the data source and any changes that were made to it
 
 @dataclass
 class HyperFileResult:
@@ -137,7 +138,10 @@ def fix_hyper_file(hyper: HyperProcess, src: Path, dst: Path) -> list[ColumnStat
     Read src, fix all TABGEOGRAPHY columns, write to dst.
     Returns per-column statistics.
     """
+    #the main function, does the actual fixing.
+    
     all_stats: list[ColumnStats] = []
+    #prepares an empty list variable which will contain ColumnStats elements
 
     # ── 1. Discover schema ──────────────────────────────────────────────────
     with Connection(hyper.endpoint, src) as conn:
@@ -149,18 +153,22 @@ def fix_hyper_file(hyper: HyperProcess, src: Path, dst: Path) -> list[ColumnStat
         table_defs: dict = {}
         for tn in table_names:
             table_defs[tn] = conn.catalog.get_table_definition(tn)
+    #discovers the schema, table names, and table definitions
 
     # ── 2. Read rows, collect unique WKT per geography column ───────────────
     # Structure: {table_name: {col_idx: {orig_wkt: (fixed_wkt, stats_obj)}}}
     table_fix_maps: dict = {}
     table_rows: dict = {}
+    #set up some dict objects (key/value pairs)
 
     with Connection(hyper.endpoint, src) as conn:
+        #the below is one big for loop across all tables
         for tn, td in table_defs.items():
             geo_indices = [
                 i for i, col in enumerate(td.columns)
                 if col.type == SqlType.geography()
             ]
+            #returns all columns with a geography type.
 
             if not geo_indices:
                 # No geography columns — read raw and pass through unchanged
@@ -176,37 +184,41 @@ def fix_hyper_file(hyper: HyperProcess, src: Path, dst: Path) -> list[ColumnStat
                 select_parts.append(
                     f"CAST({escaped} AS TEXT)" if i in geo_indices else escaped
                 )
+                #creates a list of all geography column names.
+                #this is where the columns names are cast to WKT format.
             with conn.execute_query(
                 f"SELECT {', '.join(select_parts)} FROM {tn}"
             ) as r:
                 rows = list(r)
             table_rows[tn] = rows
+            #"{', '.join(select_parts)}" joins all column names in select_parts, separated by commas. Essentially creates a nice SELECT statement to get the relevant columns and spits them into a list.
 
             # Per-column fix maps and stats
             col_fix_maps: dict = {}
             for col_idx in geo_indices:
-                col_name = td.columns[col_idx].name.unescaped
+                col_name = td.columns[col_idx].name.unescaped #.unescaped gets the raw name, no quoting.
                 stats = ColumnStats(name=f"{tn}.{col_name}")
                 wkt_map: dict[str, tuple[str, bool, bool]] = {}  # orig -> (fixed, topo, wind)
+                #the section above basically sets up the variables we'll be using later. 
 
                 for row in rows:
                     wkt_str = row[col_idx]
                     if wkt_str is None:
-                        continue
-                    stats.total_non_null += 1
-                    if wkt_str not in wkt_map:
-                        fixed_wkt, topo, wind = fix_wkt(wkt_str)
-                        fixed_geom = shapely_wkt.loads(fixed_wkt)
+                        continue #if null, move onto the next loop
+                    stats.total_non_null += 1 #otherwise, add to the non-null count
+                    if wkt_str not in wkt_map: #as the same object might be in multiple rows in the data this check saves processing the same shape twice.
+                        fixed_wkt, topo, wind = fix_wkt(wkt_str) #fix the shape
+                        fixed_geom = shapely_wkt.loads(fixed_wkt) #loads the shape from the string form
                         if not fixed_geom.is_valid:
                             stats.still_invalid.append(
-                                (wkt_str[:80], explain_validity(fixed_geom))
-                            )
+                                (wkt_str[:80], explain_validity(fixed_geom))  #:80 just takes the first 80 characters of the string
+                            ) #if the shape still isn't valid, append info about why to the results
                         wkt_map[wkt_str] = (fixed_wkt, topo, wind)
                         stats.unique_shapes += 1
                         if topo:
-                            stats.topology_repaired += 1
+                            stats.topology_repaired += 1 #add to fixed topology count
                         if wind:
-                            stats.winding_corrected += 1
+                            stats.winding_corrected += 1 #add to fixed winding count
 
                 col_fix_maps[col_idx] = wkt_map
                 all_stats.append(stats)
@@ -275,38 +287,47 @@ def process_twbx(src: Path, dst: Path) -> list[HyperFileResult]:
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
+        #creates a temp directory and grabs the path of it.
+        #with TemporaryDirectory() the temp directory automatically gets deleted once the context of the function gets exited
 
         print(f"Extracting {src.name} ...")
         with zipfile.ZipFile(src, "r") as zf:
             zf.extractall(tmp)
+            #extracts all files from the .twbx
+            #ZipFile(src, "r") - the "r" puts the mode into "read an existing file"
 
         hyper_files = list(tmp.rglob("*.hyper"))
         if not hyper_files:
             print("  No .hyper files found inside the .twbx — nothing to fix.")
             return results
+            #rglob is a recursive search for all files that match the string
+        
 
         with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as hyper:
             for hyper_path in hyper_files:
                 print(f"\nProcessing {hyper_path.relative_to(tmp)} ...")
-                fixed_path = hyper_path.with_suffix(".hyper.fixed")
-                stats, changed = fix_hyper_file(hyper, hyper_path, fixed_path)
-                _print_stats(stats, changed)
+                fixed_path = hyper_path.with_suffix(".hyper.fixed") #set up the path for the new fixed datasource.
+                stats, changed = fix_hyper_file(hyper, hyper_path, fixed_path) #fun fix_hyper_file
+                _print_stats(stats, changed) #print results
                 if changed:
-                    _verify_counts(hyper, hyper_path, fixed_path)
-                    fixed_path.replace(hyper_path)
+                    _verify_counts(hyper, hyper_path, fixed_path) #verify row counts
+                    fixed_path.replace(hyper_path) #rename the .fixed path to the original path
                 results.append(HyperFileResult(
                     filename=hyper_path.name, column_stats=stats, has_changes=changed
                 ))
+                #output the result and move to the next hyper file if one exists
 
         if not any(r.has_changes for r in results):
             print("\nNo geometry issues found — output file not created.")
             return results
+            #if no hyper files were changed, print this.
 
         print(f"\nRepackaging -> {dst.name} ...")
         with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf:
             for f in tmp.rglob("*"):
                 if f.is_file():
                     zf.write(f, f.relative_to(tmp))
+            #repackages all hyper files back into a twbx.
 
     print(f"\nDone. Output: {dst}")
     return results
@@ -314,17 +335,27 @@ def process_twbx(src: Path, dst: Path) -> list[HyperFileResult]:
 
 def process_hyper(src: Path, dst: Path) -> list[HyperFileResult]:
     """Fix a standalone .hyper file."""
+    #takes in the provided hyper and the desired destination.
+    #"-> list[HyperFileResult]" defines the return value.
+    #HyperFileResult is one of the dataclasses we defined.
     print(f"Processing {src.name} ...")
     with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU) as hyper:
         stats, changed = fix_hyper_file(hyper, src, dst)
         _print_stats(stats, changed)
         if changed:
             _verify_counts(hyper, src, dst)
+    #spawns a hyper process.
+    #runs the fix_hyper_file process
+    #note: python lets you unpack multiple variables in one go, hence the "stats, changed ="
+    #calls the _print_stats() function to report the results in the GUI.
+    #checks if anything changed in the file in terms of row counts using the _verify_counts() function
     if changed:
         print(f"\nDone. Output: {dst}")
     else:
         print("\nNo geometry issues found — output file not created.")
+    #reports on if output was produced or not
     return [HyperFileResult(filename=src.name, column_stats=stats, has_changes=changed)]
+    #the output here only gets used by the GUI to fill the results table
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +378,8 @@ def _print_stats(stats: list[ColumnStats], changed: bool = True) -> None:
             print(f"    *** {len(s.still_invalid)} shape(s) STILL INVALID after repair ***")
             for snippet, reason in s.still_invalid[:3]:
                 print(f"      {reason}: {snippet}...")
+#used for printing the stats from ColumnStats in the GUI.
+#changed: bool = True means that if no 'changed' value is supplied it defaults to 'true'.
 
 
 def _verify_counts(hyper: HyperProcess, src: Path, dst: Path) -> None:
@@ -357,6 +390,8 @@ def _verify_counts(hyper: HyperProcess, src: Path, dst: Path) -> None:
                 fixed = cd.execute_scalar_query(f"SELECT COUNT(*) FROM {tn}")
                 status = "OK" if orig == fixed else "MISMATCH"
                 print(f"  Row count {tn}: {orig} -> {fixed}  [{status}]")
+#verifies that the row counts match before and after fixing any geometry.
+#gets the data source(s) schema(s) and their tables and runs a row count on the before and after.
 
 
 # ---------------------------------------------------------------------------
@@ -373,15 +408,22 @@ def main():
         help="Output path (default: <input>_fixed.<ext> alongside the input file)",
     )
     args = parser.parse_args()
+    
+    #main() is just the main entry point.
+    #this created an argumentparse object, then defines two arguments: the input file and the output location.
+    #it then parses the users input into the two args, i.e. args.input & args.output.
+    #the -- in --output implies it's an optional parameter.
 
     src: Path = args.input.resolve()
     if not src.exists():
-        parser.error(f"File not found: {src}")
+        parser.error(f"File not found: {src}") 
+    #this converts the supplied filepath into an absolute one and checks if it exists.
 
     if args.output:
         dst = args.output.resolve()
     else:
         dst = src.with_stem(src.stem + "_fixed")
+    #this does the same conversion as above, but if it doesn't exist it just appends _fixed to the input path.
 
     ext = src.suffix.lower()
     if ext == ".twbx":
@@ -390,6 +432,7 @@ def main():
         process_hyper(src, dst)
     else:
         parser.error(f"Unsupported file type '{ext}'. Expected .twbx or .hyper.")
+    #checks the extension of the selected file and calls the appropriate function for it.
 
 
 if __name__ == "__main__":
