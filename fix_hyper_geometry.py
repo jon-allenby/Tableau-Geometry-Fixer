@@ -64,7 +64,7 @@ def fix_wkt(wkt_str: str) -> tuple[str, bool, bool]:
     geom = shapely_wkt.loads(wkt_str)
     topology_repaired = not geom.is_valid
     fixed = _fix_geom(geom)
-    # Compare Shapely-serialised WKTs (same format, so a real diff means a real
+    # Compare Shapely-serialised WKTs (same format, so a real diff means a real 
     # change). This catches exterior winding, hole winding, and buffer repairs —
     # more reliable than checking is_ccw on the exterior alone.
     winding_corrected = (not topology_repaired) and (fixed.wkt != geom.wkt)
